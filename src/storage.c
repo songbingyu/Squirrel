@@ -46,6 +46,7 @@ MEM_Storage  MEM_open_storage_func(MEM_Controller controller,
 	else {
 		storage->current_page_size = DEFAULT_PAGE_SIZE;
 	}
+	return storage;
 }
 void* MEM_storage_malloc_func(MEM_Controller controller,
 	char* filename, int line, MEM_Storage storage,
@@ -75,5 +76,15 @@ void* MEM_storage_malloc_func(MEM_Controller controller,
 		p = &(new_page->cell[0]);
 		new_page->use_cell_num = cell_num;
 	}
+	return p;
+}
 
+void MEM_dispose_storage_func(MEM_Controller controller, MEM_Storage storage) {
+	MemoryPage* tmp;
+	while (storage->page_list) {
+		tmp = storage->page_list->next;
+		MEM_free_func(controller, storage->page_list);
+		storage->page_list = tmp;
+	}
+	MEM_free_func(controller, storage);
 }
