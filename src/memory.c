@@ -95,6 +95,16 @@ static void  rechain_block(MEM_Controller controller, Header* header) {
 	}
 }
 
+static void unchain_block(MEM_Controller controller, Header* header) {
+	if (header->s.prev) {
+		header->s.prev->s.next = header->s.next;
+	} else {
+		controller->block_header = header->s.next;
+	}
+	if (header->s.next) {
+		header->s.next->s.prev = header->s.prev;
+	}
+}
 void set_header(Header* header, int size, char* filename, int line) {
 	header->s.size = size;
 	header->s.filename = filename;
@@ -107,4 +117,166 @@ void set_tail(void* ptr, int alloc_size) {
 	tail = ((char*)ptr) + alloc_size - MARK_SIZE;
 	memset(tail, MARK, MARK_SIZE);
 }
-#endif //DEBUG
+
+void check_mark_sub(unsigned char* mark, int size) {
+	int i;
+	for (i = 0; i < size; ++i) {
+		if (mark[i] !+ MARK) {
+			fprintf(stderr, "bad mark\n");
+			abort();
+		}
+	}
+}
+
+void check_mark(Header* header) {
+	unsigned char* tail;
+	check_mark_sub(header->s.mark, (char*)&header[1] - (char*)header->s.mark);
+	tail = ((unsigned char*)header) + header->s.size + sizeof(Header);
+	check_mark_sub(tail, MARK_SIZE);
+}
+#endif // DEBUG
+
+void* MEM_malloc_func(MEM_Controller controller, char* filename, \
+	int line, size_t size) {
+	void* ptr;
+	size_t alloc_size;
+
+#ifdef DEBUG
+	alloc_size = size + sizeof(Header) +MARK_SIZE;
+#else
+	alloc_size = size;
+#endif
+
+	ptr = malloc(alloc_size);
+	if (ptr == NULL) {
+		error_handler(controller, filename, line, "malloc");
+	}
+
+#ifdef DEBUG
+	memset(ptr, 0xCC, alloc_size);
+	set_header(ptr, size, filename, line);
+	set_tail(ptr, alloc_size);
+	chain_block(controller, (Header*)ptr);
+	ptr = (char*)ptr + sizeof(Header);
+#endif
+
+	return ptr;
+}
+
+void* MEM_realloc_func(MEM_Controller controller, char* filename,
+	int line, void* ptr, size_t size) {
+	void*	new_ptr;
+	size_t	alloc_size;
+	void*	real_ptr;
+#ifdef DEBUG
+	Header	old_header;
+	int		old_size;
+	alloc_size = size + sizeof(Header) + MARK_SIZE;
+	if (ptr != NULL) {
+		real_ptr = (char*)ptr - sizeof(Header);
+		check_mark((Header*)real_ptr);
+		old_header = *((Header*)real_ptr);
+		old_size = old_header.s.size;
+		unchain_block(controller, real_ptr);
+	} else {
+		real_ptr = NULL;
+		old_size = 0;
+	}
+#else 
+	alloc_size = size;
+	real_ptr = ptr;
+#endif // DEBUG
+
+	new_ptr = realloc(real_ptr, alloc_size);
+	if (new_ptr == NULL) {
+		if (ptr == NULL) {
+			error_handler(controller, filename, line, "realloc(malloc)");
+		} else {
+			error_handler(controller, filename, line, "realloc");
+			free(real_ptr);
+		}
+	}
+
+#ifdef DEBUG
+	if (ptr) {
+		*((Header*)new_ptr) = old_header;
+		((Header*)new_ptr)->s.size = size;
+		rechain_block(controller, (Header*)new_ptr);
+		set_tail(new_ptr, alloc_size);
+	} else {
+		set_header(new_ptr, size, filename, line);
+		set_tail(new_ptr, alloc_size);
+		chain_block(controller, (Header*)new_ptr);
+	}
+	new_ptr = (char*)new_ptr + sizeof(Header);
+	if (size > old_size) {
+		memset((char*)new_ptr + old_size, 0xcc, size - old_size);
+	}
+#endif
+	return(new_ptr);
+}
+
+char* MEM_strdup_func(MEM_Controller controller,
+	char* filename, int line, char* str) {
+	char*	ptr;
+	int		size;
+	size_t	alloc_size;
+	size = strlen(str) + 1;
+#ifdef DEBUG
+	alloc_size = size + sizeof(Header) + MARK_SIZE;
+#else
+	alloc_size = size;
+#endif
+	ptr = malloc(alloc_size);
+	if (ptr == NULL) {
+		error_handler(controller, filename, line, "strdup");
+	}
+#ifdef DEBUG
+	memset(ptr, 0xCC, alloc_size);
+	set_header((Header*)ptr, size, filename, line);
+	set_tail(ptr, alloc_size);
+	chain_block(controller, (Header*)ptr);
+	ptr = (char*)ptr + sizeof(Header);
+#endif
+	strcpy(ptr, str);
+
+	return ptr;
+}
+
+void MEM_free_func(MEM_Controller controller, void* ptr) {
+	void*	real_ptr;
+#ifdef DEBUG
+	int size;
+#endif
+	if (ptr == NULL)
+		return;
+#ifdef  DEBUG
+	real_ptr = (char*)ptr - sizeof(Header);
+#else
+	real_ptr = ptr;
+#endif
+
+	free(real_ptr);
+}
+
+void MEM_set_error_handler(MEM_Controller controller, MEM_ErrorHandler handler) {
+	controller->error_handler = handler;
+}
+
+void MEM_set_fail_mode(MEM_Controller controller, MEM_FailMode mode) {
+	controller->fail_mode = mode;
+}
+
+void MEM_dump_blocks_func(MEM_Controller controller, FILE* fp) {
+#ifdef DEBUG
+	Header* pos;
+	int counter = 0;
+	for (pos = controller->block_header; pos; pos = pos->s.next) {
+		check_mark(pos);
+		fprintf(fp, "[%04d]%p**************************\n", counter, 
+			(char*)pos + sizeof(Header));
+		fprintf(fp, "%s line %d size..%d\n", pos->s.filename, pos->s.line, pos->s.size);
+		counter++;
+	}
+#endif // DEBUG
+}
